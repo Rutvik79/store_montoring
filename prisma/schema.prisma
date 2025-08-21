@@ -1,0 +1,61 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  // output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model StoreStatus {
+  id           Int        @id @default(autoincrement())
+  storeId      String
+  timestampUtc DateTime
+  status       StoreState
+
+  @@index([storeId])
+}
+
+model BusinessHours {
+  id        Int    @id @default(autoincrement())
+  storeId   String
+  dayOfWeek Int // 0=Monday, 6=Sunday
+  startTime String // store hours in local time, format "HH:mm:ss"
+  endTime   String
+
+  @@index([storeId])
+}
+
+model StoreTimezone {
+  id       Int    @id @default(autoincrement())
+  storeId  String
+  timezone String // eg: "America/Chicago"
+
+  @@index([storeId])
+}
+
+model Report {
+  id        String       @id @default(uuid())
+  status    ReportStatus @default(RUNNING)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  filePath  String // path to generate CSV (if completed)
+}
+
+enum StoreState {
+  active
+  inactive
+}
+
+enum ReportStatus {
+  RUNNING
+  COMPLETE
+  FAILED
+}
