@@ -43,26 +43,11 @@ export const getReport = async (req: Request, res: Response) => {
       return res.json({ reportId: report.id, status: "FAILED" });
     }
 
-    // if (report.status === "COMPLETE") {
-    //   res.json({
-    //     reportId: report.id,
-    //     status: report.status,
-    //     downloadUrl: `reports/${path.basename(report.filePath)}`,
-    //     filePath: report.filePath,
-    //   });
-    // } else {
-    //   res.json({ reportId: report.id, status: report.status });
-    // }
-
-    // When COMPLETE, send CSV file directly
-    if (report.status === "COMPLETE" && report.filePath) {
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=${report.id}.csv`
-      );
-      return res.sendFile(report.filePath);
+    if (report.filePath) {
+      return res.download(report.filePath, path.basename(report.filePath));
     }
+
+    return res.json({ reportId: report.id, status: report.status });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch report" });

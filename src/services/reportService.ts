@@ -85,54 +85,65 @@ export async function generateReport(reportId: string) {
 // Helpers
 
 async function computeMetrics(storeId: string) {
-  // 1. get time zone (default = America/Chicago)
   const tzRow = await prisma.storeTimezone.findUnique({
     where: { storeId },
   });
   const timezone = tzRow?.timezone || "America/Chicago";
 
-  // 2. get latest status timestamp (define "now")
   const globalLatest = await prisma.storeStatus.findFirst({
     orderBy: { timestampUtc: "desc" },
   });
 
-  if (!globalLatest) {
-    return emptyMetrics();
-  }
+  if (!globalLatest) return emptyMetrics();
 
   const now = DateTime.fromJSDate(globalLatest.timestampUtc, { zone: "utc" });
-
-  // 3. Define periods
   const hourAgo = now.minus({ hours: 1 });
   const dayAgo = now.minus({ days: 1 });
   const weekAgo = now.minus({ weeks: 1 });
 
-  // 4. Load business hours once
+  // fetch all statuses for this store in max window (week)
+  const statuses = await prisma.storeStatus.findMany({
+    where: {
+      storeId,
+      timestampUtc: { gte: weekAgo.toJSDate(), lte: now.toJSDate() },
+    },
+    orderBy: { timestampUtc: "asc" },
+  });
+
+  // fetch last status before the window once
+  const prevStatus = await prisma.storeStatus.findFirst({
+    where: { storeId, timestampUtc: { lt: weekAgo.toJSDate() } },
+    orderBy: { timestampUtc: "desc" },
+  });
+
+  // load business hours once
   const businessHours = await prisma.businessHours.findMany({
     where: { storeId },
   });
-
   const useBusinessHours = businessHours.length > 0;
 
-  // 5. Compute metrics for each window
-  const lastHour = await computeForPeriod(
-    storeId,
+  // pass preloaded statuses
+  const lastHour = computeForPeriod(
+    statuses,
+    prevStatus,
     hourAgo,
     now,
     timezone,
     businessHours,
     useBusinessHours
   );
-  const lastDay = await computeForPeriod(
-    storeId,
+  const lastDay = computeForPeriod(
+    statuses,
+    prevStatus,
     dayAgo,
     now,
     timezone,
     businessHours,
     useBusinessHours
   );
-  const lastWeek = await computeForPeriod(
-    storeId,
+  const lastWeek = computeForPeriod(
+    statuses,
+    prevStatus,
     weekAgo,
     now,
     timezone,
@@ -150,118 +161,78 @@ async function computeMetrics(storeId: string) {
   };
 }
 
-async function computeForPeriod(
-  storeId: string,
+function computeForPeriod(
+  allStatuses: { timestampUtc: Date; status: string }[],
+  prevStatus: { timestampUtc: Date; status: string } | null,
   start: DateTime,
   end: DateTime,
   timezone: string,
   businessHours: { dayOfWeek: number; startTime: string; endTime: string }[],
   useBusinessHours: boolean
 ) {
-  // 1. Get statuses in the period
-  const statuses = await prisma.storeStatus.findMany({
-    where: {
-      storeId,
-      timestampUtc: {
-        gte: start.toJSDate(),
-        lte: end.toJSDate(),
-      },
-    },
-    orderBy: { timestampUtc: "asc" },
-  });
-
-  // 2. Build open intervals in UTC
   let openIntervals: { start: DateTime; end: DateTime }[] = [];
 
   if (useBusinessHours) {
     let cursor = start.startOf("day");
     while (cursor <= end) {
-      const dayOfWeek = (cursor.weekday + 6) % 7; // Luxon Mon=1..Sun=7
+      const dayOfWeek = (cursor.weekday + 6) % 7;
       const todayHours = businessHours.filter(
         (bh) => bh.dayOfWeek === dayOfWeek
       );
 
       for (const bh of todayHours) {
-        const [startH, startM, startS] = bh.startTime.split(":").map(Number);
-        const [endH, endM, endS] = bh.endTime.split(":").map(Number);
+        const [sh, sm, ss] = bh.startTime.split(":").map(Number);
+        const [eh, em, es] = bh.endTime.split(":").map(Number);
 
-        const localStart = cursor.set({
-          hour: startH,
-          minute: startM,
-          second: startS,
-        });
-        const localEnd = cursor.set({
-          hour: endH,
-          minute: endM,
-          second: endS,
-        });
+        const localStart = cursor.set({ hour: sh, minute: sm, second: ss });
+        const localEnd = cursor.set({ hour: eh, minute: em, second: es });
 
         const utcStart = localStart.setZone(timezone).toUTC();
         const utcEnd = localEnd.setZone(timezone).toUTC();
 
-        // clip to [start, end]
         const intervalStart = utcStart < start ? start : utcStart;
         const intervalEnd = utcEnd > end ? end : utcEnd;
 
-        if (intervalStart < intervalEnd) {
+        if (intervalStart < intervalEnd)
           openIntervals.push({ start: intervalStart, end: intervalEnd });
-        }
       }
 
       cursor = cursor.plus({ days: 1 });
     }
   } else {
-    // Open 24/7
     openIntervals = [{ start, end }];
   }
 
-  // 3. Iterate statuses only within open intervals
   let uptimeMinutes = 0;
   let downtimeMinutes = 0;
 
   for (const interval of openIntervals) {
-    // fetch prevStatus just before this interval
-    const intervalPrevStatus = await prisma.storeStatus.findFirst({
-      where: {
-        storeId,
-        timestampUtc: { lt: interval.start.toJSDate() },
-      },
-      orderBy: { timestampUtc: "desc" },
+    const relevant = allStatuses.filter((s) => {
+      const t = DateTime.fromJSDate(s.timestampUtc, { zone: "utc" });
+      return t >= interval.start && t <= interval.end;
     });
 
-    const relevantStatuses = statuses.filter(
-      (s) =>
-        DateTime.fromJSDate(s.timestampUtc, { zone: "utc" }) >=
-          interval.start &&
-        DateTime.fromJSDate(s.timestampUtc, { zone: "utc" }) <= interval.end
-    );
+    let cursorTime = interval.start;
+    let lastStatus = prevStatus ?? relevant[0];
 
-    // Case A: No statuses in interval
-    if (relevantStatuses.length === 0) {
+    if (!relevant.length) {
       const duration = interval.end.diff(interval.start, "minutes").minutes;
-      if (intervalPrevStatus?.status === "active") uptimeMinutes += duration;
+      if (lastStatus?.status === "active") uptimeMinutes += duration;
       else downtimeMinutes += duration;
       continue;
     }
 
-    // Case B: Seed with intervalPrevStatus (or first status inside interval)
-    let cursorTime = interval.start;
-    let lastStatus = intervalPrevStatus ?? relevantStatuses[0];
-
-    for (const curr of relevantStatuses) {
+    for (const curr of relevant) {
       const currTime = DateTime.fromJSDate(curr.timestampUtc, { zone: "utc" });
       const duration = currTime.diff(cursorTime, "minutes").minutes;
-
-      if (lastStatus!.status === "active") uptimeMinutes += duration;
+      if (lastStatus?.status === "active") uptimeMinutes += duration;
       else downtimeMinutes += duration;
-
       cursorTime = currTime;
       lastStatus = curr;
     }
 
-    // Fill from last status to interval end
     const tailDuration = interval.end.diff(cursorTime, "minutes").minutes;
-    if (lastStatus!.status === "active") uptimeMinutes += tailDuration;
+    if (lastStatus?.status === "active") uptimeMinutes += tailDuration;
     else downtimeMinutes += tailDuration;
   }
 
