@@ -35,15 +35,33 @@ export const getReport = async (req: Request, res: Response) => {
 
     if (!report) return res.status(404).json({ error: "Report not found" });
 
-    if (report.status === "COMPLETE") {
-      res.json({
-        reportId: report.id,
-        status: report.status,
-        downloadUrl: `reports/${path.basename(report.filePath)}`,
-        filePath: report.filePath,
-      });
-    } else {
-      res.json({ reportId: report.id, status: report.status });
+    if (report.status === "RUNNING") {
+      return res.json({ reportId: report.id, status: "Running" });
+    }
+
+    if (report.status === "FAILED") {
+      return res.json({ reportId: report.id, status: "FAILED" });
+    }
+
+    // if (report.status === "COMPLETE") {
+    //   res.json({
+    //     reportId: report.id,
+    //     status: report.status,
+    //     downloadUrl: `reports/${path.basename(report.filePath)}`,
+    //     filePath: report.filePath,
+    //   });
+    // } else {
+    //   res.json({ reportId: report.id, status: report.status });
+    // }
+
+    // When COMPLETE, send CSV file directly
+    if (report.status === "COMPLETE" && report.filePath) {
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=${report.id}.csv`
+      );
+      return res.sendFile(report.filePath);
     }
   } catch (error) {
     console.error(error);

@@ -35,7 +35,7 @@ model BusinessHours {
 
 model StoreTimezone {
   id       Int    @id @default(autoincrement())
-  storeId  String
+  storeId  String @unique
   timezone String // eg: "America/Chicago"
 
   @@index([storeId])
