@@ -1,3 +1,5 @@
+Script(to run api): npm run dev
+
 1. Step1: Database Schema (Prisma)
    tables needed:
    store_status -> (active/inactive logs)
