@@ -26,6 +26,7 @@
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
     "express": "^5.1.0",
+    "git-filter-repo": "^0.0.30",
     "helmet": "^8.1.0",
     "luxon": "^3.7.1",
     "nodemon": "^3.1.10",
