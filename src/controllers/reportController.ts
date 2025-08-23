@@ -53,7 +53,3 @@ export const getReport = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to fetch report" });
   }
 };
-
-// export const downloadReport = async (req: Request, res: Response) {
-
-// }
